@@ -45,6 +45,8 @@ class RationManager:
     user_defined_rations: dict[AnimalCombination, dict[RUFAS_ID, float]] | None
     tolerance: float | None = 0.0
     maximum_ration_reformulation_attempts: int
+    optimizer_method: str = "SLSQP"
+    """Solver used by ``RationOptimizer``, chosen with ``--ration-optimizer``: ``"SLSQP"`` (default) or ``"simplex"``."""
     intake_options: dict[AnimalCombination, IntakeOption] = {}
     intake_values: dict[AnimalCombination, float | None] = {}
 

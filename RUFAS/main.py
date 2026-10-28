@@ -15,10 +15,12 @@ from typing import Any
 
 from RUFAS.output_manager import LogVerbosity, OutputManager
 from RUFAS.task_manager import TaskManager
+from RUFAS.biophysical.animal.ration.ration_manager import RationManager
 
 
 def main() -> None:
     cmd_arguments = parse_gnu_args(sys.argv[1:])
+    RationManager.optimizer_method = cmd_arguments.ration_optimizer or "SLSQP"
     try:
         task_manager = TaskManager()
         task_manager.start(
@@ -120,6 +122,16 @@ def parse_gnu_args(args: Any | None = None) -> argparse.Namespace:
         "--path-to-metadata",
         help="Path to the task manager metadata that will determine the tasks run",
         default="input/task_manager_metadata.json",
+    )
+    parser.add_argument(
+        "-r",
+        "--ration-optimizer",
+        choices=["SLSQP", "simplex"],
+        default=None,
+        help=(
+            "Solver used to formulate rations: 'SLSQP' (scipy, the default) or 'simplex' (sequential two-phase "
+            "Simplex that also exports the final tableau of each formulation to output/simplex/)."
+        ),
     )
     return parser.parse_args(args)
 
