@@ -1,0 +1,6 @@
+# Configuração do Streamlit para o dashboard de analise_sensibilidade/ (lida da raiz do RuFaS).
+[server]
+showEmailPrompt = false
+
+[browser]
+gatherUsageStats = false
