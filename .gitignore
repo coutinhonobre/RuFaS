@@ -70,3 +70,5 @@ DataCollectionApp/schema/*
 !DataCollectionApp/schema/.keep
 
 docs/_build/
+
+relatorio-latex/
