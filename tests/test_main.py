@@ -102,7 +102,7 @@ def test_parse_gnu_args(mocker: MockerFixture) -> None:
     actual_args = parse_gnu_args()
 
     # Assert
-    assert mock_add_argument.call_count == 9
+    assert mock_add_argument.call_count == 10
     assert mock_add_argument.call_args_list == [
         mocker.call(
             "-g",
@@ -159,6 +159,16 @@ def test_parse_gnu_args(mocker: MockerFixture) -> None:
             help="Path to the task manager metadata that will determine the tasks run",
             default="input/task_manager_metadata.json",
         ),
+        mocker.call(
+            "-r",
+            "--ration-optimizer",
+            choices=["SLSQP", "simplex"],
+            default=None,
+            help=(
+                "Solver used to formulate rations: 'SLSQP' (scipy, the default) or 'simplex' (sequential two-phase "
+                "Simplex that also exports the final tableau of each formulation to output/simplex/)."
+            ),
+        ),
     ]
     mock_parse_args.assert_called_once()
     assert actual_args == "test_args"
@@ -180,3 +190,31 @@ def test_case_insensitive_argument_action() -> None:
     for argument in arguments:
         assert hasattr(namespace, argument)
         assert getattr(namespace, argument) == value
+
+
+def test_parse_gnu_args_ration_optimizer_defaults_to_none() -> None:
+    """Without the flag the input files decide the solver (whose own default is SLSQP)."""
+    assert parse_gnu_args([]).ration_optimizer is None
+
+
+@pytest.mark.parametrize("solver", ["SLSQP", "simplex"])
+def test_parse_gnu_args_ration_optimizer_accepts_known_solvers(solver: str) -> None:
+    assert parse_gnu_args(["-r", solver]).ration_optimizer == solver
+    assert parse_gnu_args(["--ration-optimizer", solver]).ration_optimizer == solver
+
+
+def test_parse_gnu_args_ration_optimizer_rejects_unknown_solver() -> None:
+    with pytest.raises(SystemExit):
+        parse_gnu_args(["--ration-optimizer", "newton"])
+
+
+def test_main_forwards_ration_optimizer_to_ration_manager(
+    mock_task_manager: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from RUFAS.biophysical.animal.ration.ration_manager import RationManager
+
+    mock_task_manager.return_value.start.return_value = None
+    monkeypatch.setattr(sys, "argv", ["main.py", "-r", "simplex", "-p", "some/metadata.json"])
+    monkeypatch.setattr(RationManager, "optimizer_method", "SLSQP")
+    main()
+    assert RationManager.optimizer_method == "simplex"

@@ -6,6 +6,11 @@ from typing import Callable, Any, Sequence, Optional
 from RUFAS.biophysical.animal.nutrients.nutrition_supply_calculator import NutritionSupplyCalculator, FeedInRation
 from RUFAS.biophysical.animal.data_types.animal_combination import AnimalCombination
 from RUFAS.biophysical.animal.ration.ration_manager import RationManager
+from RUFAS.biophysical.animal.ration.simplex_optimizer import (
+    SIMPLEX_METHOD_NAME,
+    SimplexRationSolver,
+    SimplexReportExporter,
+)
 from RUFAS.units import MeasurementUnits
 from RUFAS.general_constants import GeneralConstants
 from RUFAS.biophysical.animal.animal_module_constants import AnimalModuleConstants
@@ -836,6 +841,8 @@ class RationOptimizer:
         previous_ration: dict[RUFAS_ID | str, float | str] | None = None,
         user_defined_ration_dictionary: dict[RUFAS_ID, float] | None = None,
         user_defined_ration_tolerance: float | None = None,
+        pen_label: str | None = None,
+        method: str | None = None,
     ) -> tuple[OptimizeResult, RationConfig]:
         """
         Sets up the nutrients and requirements lists into structured inputs for non-linear optimization.
@@ -862,6 +869,12 @@ class RationOptimizer:
             Dictionary of feed IDs and inclusion rate.
         user_defined_ration_tolerance : float
             Allowable tolerance of user defined ration inclusion rate.
+        pen_label : str, optional
+            Identifier of the pen (e.g. ``LAC_COW_PEN_3``), used to name the Simplex output files.
+        method : str, optional
+            ``"SLSQP"`` (scipy, the original solver) or ``"simplex"`` (sequential two-phase Simplex). When omitted,
+            the solver chosen on the command line (``--ration-optimizer``, kept in ``RationManager.optimizer_method``)
+            is used; the default is SLSQP.
 
         Returns
         -------
@@ -908,16 +921,87 @@ class RationOptimizer:
 
         constraints_to_use = self._select_constraints(animal_combination)
 
-        optimized_ration_attempt = minimize(
-            self.objective,
-            initial_decision_vector,
-            method="SLSQP",
-            bounds=bounds,
-            constraints=constraints_to_use,
-            args=ration_config,
-        )
+        selected_method = (method or RationManager.optimizer_method or "SLSQP").lower()
+        if selected_method == SIMPLEX_METHOD_NAME:
+            optimized_ration_attempt = self._minimize_with_simplex(
+                ration_config=ration_config,
+                constraints=constraints_to_use,
+                bounds=bounds,
+                previous_ration=sorted_previous_ration,
+                user_defined_ration_dictionary=user_defined_ration_dictionary,
+                pen_label=pen_label or (animal_combination.name if animal_combination else "PEN"),
+            )
+        else:
+            optimized_ration_attempt = minimize(
+                self.objective,
+                initial_decision_vector,
+                method="SLSQP",
+                bounds=bounds,
+                constraints=constraints_to_use,
+                args=ration_config,
+            )
 
         return optimized_ration_attempt, ration_config
+
+    def _minimize_with_simplex(
+        self,
+        ration_config: RationConfig,
+        constraints: Sequence[dict[str, Any]],
+        bounds: list[tuple[float, float]],
+        previous_ration: Optional[dict[RUFAS_ID | str, float | str]],
+        user_defined_ration_dictionary: dict[RUFAS_ID, float] | None,
+        pen_label: str,
+    ) -> OptimizeResult:
+        """
+        Drop-in replacement for ``scipy.optimize.minimize`` that solves the same ration problem (same objective,
+        constraints and bounds) with the sequential two-phase Simplex, exports its final tableau and returns a
+        scipy-like ``OptimizeResult`` (``x``, ``success``, ``fun``, ``nit``, ``message``).
+        """
+        start = self._build_simplex_initial_value(
+            previous_ration,
+            ration_config,
+            dict(sorted(user_defined_ration_dictionary.items())) if user_defined_ration_dictionary else None,
+        )
+        start = self._check_initial_bounds(bounds, start)
+        optimized_ration_attempt, report = SimplexRationSolver().solve(
+            objective_coefficients=ration_config.price_list,
+            constraints=constraints,
+            ration_config=ration_config,
+            bounds=bounds,
+            initial_x=start,
+            variable_names=[str(feed.rufas_id) for feed in ration_config.feeds_used],
+        )
+        SimplexReportExporter.export(pen_label, report, [feed.rufas_id for feed in ration_config.feeds_used])
+        return optimized_ration_attempt
+
+    @staticmethod
+    def _build_simplex_initial_value(
+        previous_ration: Optional[dict[RUFAS_ID | str, float | str]],
+        ration_config: RationConfig,
+        user_defined_ration: Optional[dict[RUFAS_ID, float]],
+    ) -> np.ndarray[tuple[int, ...], np.dtype]:
+        """
+        Builds a deterministic starting ration for the sequential Simplex: the previous ration when it covers
+        the same feeds, otherwise the user defined ration scaled to the target intake, otherwise the target
+        intake split evenly among the feeds.
+        """
+        n_feeds = len(ration_config.feeds_used)
+        if previous_ration:
+            values = [float(v) for k, v in previous_ration.items() if k not in ("status", "objective")]
+            if len(values) == n_feeds:
+                return np.array(values, dtype=float)
+        target_intake = ration_config.initial_dry_matter_requirement * ration_config.dmi_requirement_boost
+        if user_defined_ration:
+            feed_ids = [feed.rufas_id for feed in ration_config.feeds_used]
+            if set(int(k) for k in user_defined_ration) == set(int(f) for f in feed_ids):
+                return np.array(
+                    [
+                        target_intake * float(user_defined_ration[k]) * GeneralConstants.PERCENTAGE_TO_FRACTION
+                        for k in sorted(user_defined_ration, key=int)
+                    ],
+                    dtype=float,
+                )
+        return np.full(n_feeds, target_intake / max(n_feeds, 1), dtype=float)
 
     @staticmethod
     def _check_initial_bounds(

@@ -16,6 +16,8 @@ dependencies = [
     "matplotlib>=3.10.0",
     "numpy==2.2.0",
     "pandas>=2.2.3",
+    "pulp>=2.9,<3",
+    "highspy>=1.7",
     "scipy>=1.15.1",
     "typing_extensions>=4.12.2",
     "salib==1.5.1",
